@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="es" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analizador de Audio y Transformada de Fourier</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- MathJax for rendering LaTeX equations -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.2/es5/tex-mml-chtml.js"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        techDark: '#0b0f19',
+                        techCard: '#131b2e',
+                        techAccent: '#00f2fe',
+                        techSecondary: '#4facfe',
+                        techPurple: '#7000ff'
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background-color: #080c14;
+            color: #e2e8f0;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            border-radius: 0.5rem;
+        }
+        /* Custom scrollbar for mathematical details */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0f172a;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #334155;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #475569;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col p-3 md:p-6 text-slate-200">
+
+    <!-- Header -->
+    <header class="mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-techCard p-4 md:p-6 rounded-xl border border-slate-800 shadow-xl">
+        <div>
+            <h1 class="text-2xl md:text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-500 flex items-center gap-3">
+                <i class="fa-solid font-mono fa-wave-square text-cyan-400"></i>
+                Analizador Espectral y Transformadas de Fourier
+            </h1>
+            <p class="text-xs md:text-sm text-slate-400 mt-1">
+                Procesamiento de señal de audio en tiempo real, dominio del tiempo/frecuencia y muestreo discreto.
+            </p>
+        </div>
+
+        <!-- Mic Controls -->
+        <div class="flex flex-wrap items-center gap-3 w-full md:w-auto">
+            <select id="audioSourceSelect" class="px-3 py-3 rounded-lg font-bold bg-slate-900 text-cyan-400 border border-slate-700 text-xs md:text-sm focus:outline-none focus:border-cyan-500 cursor-pointer">
+                <option value="mic">🎙️ Micrófono</option>
+                <option value="system">🖥️ Audio del Sistema / Pestaña</option>
+            </select>
+            <button id="toggleMic" class="flex-1 md:flex-none px-5 py-3 rounded-lg font-bold flex items-center justify-center gap-2 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 transition-all shadow-lg shadow-cyan-500/20 active:scale-95">
+                <i id="micIcon" class="fa-solid fa-play"></i>
+                <span id="micText">Iniciar Captura</span>
+            </button>
+            <button id="freezeBtn" class="px-4 py-3 rounded-lg font-bold flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-all">
+                <i id="freezeIcon" class="fa-solid fa-pause"></i>
+                <span class="hidden sm:inline">Pausar</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Grid -->
+    <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
+
+        <!-- Left Controls & Audio Params Panel -->
+        <div class="lg:col-span-1 space-y-6">
+            
+            <!-- Controls Card -->
+            <div class="bg-techCard p-5 rounded-xl border border-slate-800 shadow-lg space-y-4">
+                <h2 class="text-lg font-bold text-cyan-400 border-b border-slate-800 pb-2 flex items-center gap-2">
+                    <i class="fa-solid fa-sliders"></i> Configuración de Señal
+                </h2>
+
+                <!-- FFT Size / Buffer N -->
+                <div>
+                    <label for="fftSizeSelect" class="block text-xs font-semibold text-slate-400 mb-1">
+                        Tamaño de Muestras ($N$ / FFT Size):
+                    </label>
+                    <select id="fftSizeSelect" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-cyan-300 focus:outline-none focus:border-cyan-500">
+                        <option value="256">N = 256 muestras</option>
+                        <option value="512">N = 512 muestras</option>
+                        <option value="1024" selected>N = 1024 muestras</option>
+                        <option value="2048">N = 2048 muestras</option>
+                        <option value="4096">N = 4096 muestras</option>
+                    </select>
+                </div>
+
+                <!-- Wave Mode (Discreta vs Continua) -->
+                <div>
+                    <label class="block text-xs font-semibold text-slate-400 mb-1">
+                        Representación del Tiempo:
+                    </label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <button id="modeContinuous" class="px-3 py-2 text-xs font-bold rounded-lg border border-cyan-500 bg-cyan-500/20 text-cyan-300">
+                            Continua $x(t)$
+                        </button>
+                        <button id="modeDiscrete" class="px-3 py-2 text-xs font-bold rounded-lg border border-slate-700 bg-slate-900 text-slate-400 hover:border-slate-600">
+                            Discreta $x[n]$
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Gain / Mic Gain -->
+                <div>
+                    <div class="flex justify-between text-xs font-semibold text-slate-400 mb-1">
+                        <span>Ganancia de Entradada:</span>
+                        <span id="gainVal">1.0x</span>
+                    </div>
+                    <input id="gainSlider" type="range" min="0.1" max="5.0" step="0.1" value="1.0" class="w-full accent-cyan-400 bg-slate-900 h-2 rounded-lg appearance-none cursor-pointer">
+                </div>
+
+                <!-- Spectrogram Sensitivity -->
+                <div>
+                    <div class="flex justify-between text-xs font-semibold text-slate-400 mb-1">
+                        <span>Sensibilidad Espectrograma:</span>
+                        <span id="specSensVal">2.0</span>
+                    </div>
+                    <input id="specSensSlider" type="range" min="0.5" max="5.0" step="0.1" value="2.0" class="w-full accent-purple-400 bg-slate-900 h-2 rounded-lg appearance-none cursor-pointer">
+                </div>
+
+                <!-- Spectrogram Color Scheme -->
+                <div>
+                    <label for="colorMapSelect" class="block text-xs font-semibold text-slate-400 mb-1">
+                        Paleta Espectrograma:
+                    </label>
+                    <select id="colorMapSelect" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-purple-300 focus:outline-none focus:border-purple-500">
+                        <option value="inferno">Inferno / Térmico</option>
+                        <option value="rainbow">Arcoíris / Neón</option>
+                        <option value="cyan">Cian Electrónico</option>
+                        <option value="grayscale">Escala de Grises</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Dynamic Telemetry Card -->
+            <div class="bg-techCard p-5 rounded-xl border border-slate-800 shadow-lg space-y-3">
+                <h2 class="text-lg font-bold text-blue-400 border-b border-slate-800 pb-2 flex items-center gap-2">
+                    <i class="fa-solid fa-microchip"></i> Parámetros de Señal
+                </h2>
+                
+                <div class="grid grid-cols-2 gap-3 text-xs">
+                    <div class="bg-slate-900/80 p-3 rounded-lg border border-slate-800">
+                        <span class="text-slate-500 block">Frecuencia Muestreo ($f_s$)</span>
+                        <span id="sampleRateDisp" class="text-sm md:text-base font-mono font-bold text-cyan-300">-- Hz</span>
+                    </div>
+                    <div class="bg-slate-900/80 p-3 rounded-lg border border-slate-800">
+                        <span class="text-slate-500 block">Periodo Muestreo ($T_s$)</span>
+                        <span id="samplePeriodDisp" class="text-sm md:text-base font-mono font-bold text-cyan-300">-- ms</span>
+                    </div>
+                    <div class="bg-slate-900/80 p-3 rounded-lg border border-slate-800">
+                        <span class="text-slate-500 block">Frecuencia F0 (Pico)</span>
+                        <span id="peakFreqDisp" class="text-sm md:text-base font-mono font-bold text-emerald-400">-- Hz</span>
+                    </div>
+                    <div class="bg-slate-900/80 p-3 rounded-lg border border-slate-800">
+                        <span class="text-slate-500 block">Magnitud Máxima</span>
+                        <span id="peakMagDisp" class="text-sm md:text-base font-mono font-bold text-purple-400">-- dB</span>
+                    </div>
+                </div>
+
+                <!-- Nyquist Information -->
+                <div class="bg-slate-900/50 p-3 rounded-lg border border-slate-800 text-xs text-slate-400">
+                    <div class="flex justify-between">
+                        <span>Límite de Nyquist ($f_s / 2$):</span>
+                        <span id="nyquistDisp" class="font-mono text-slate-200">-- Hz</span>
+                    </div>
+                    <div class="flex justify-between mt-1">
+                        <span>Resolución Frecuencia ($\Delta f$):</span>
+                        <span id="freqResDisp" class="font-mono text-slate-200">-- Hz/bin</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Mathematical Foundations Accordion -->
+            <div class="bg-techCard p-5 rounded-xl border border-slate-800 shadow-lg space-y-3">
+                <h2 class="text-md font-bold text-purple-400 border-b border-slate-800 pb-2 flex items-center gap-2">
+                    <i class="fa-solid fa-square-root-variable"></i> Ecuaciones de Fourier
+                </h2>
+                
+                <div class="space-y-3 text-xs text-slate-300 max-h-80 overflow-y-auto pr-1">
+                    <div>
+                        <span class="font-semibold text-cyan-300 block mb-1">1. Transformada Discreta de Fourier (DFT)</span>
+                        <p class="text-slate-400 mb-1">Para la señal muestreada digitalmente $x[n]$:</p>
+                        <div class="bg-slate-950 p-2 rounded text-center overflow-x-auto text-cyan-200">
+                            $$X[k] = \sum_{n=0}^{N-1} x[n] \cdot e^{-j 2\pi \frac{k n}{N}}$$
+                        </div>
+                    </div>
+
+                    <div>
+                        <span class="font-semibold text-purple-300 block mb-1">2. Transformada Continua (CTFT)</span>
+                        <p class="text-slate-400 mb-1">Modelado en el dominio del tiempo continuo $x(t)$:</p>
+                        <div class="bg-slate-950 p-2 rounded text-center overflow-x-auto text-purple-200">
+                            $$X(\omega) = \int_{-\infty}^{\infty} x(t) \cdot e^{-j\omega t} \, dt$$
+                        </div>
+                    </div>
+
+                    <div>
+                        <span class="font-semibold text-emerald-300 block mb-1">3. Muestreo Discreto</span>
+                        <p class="text-slate-400 mb-1">Relación entre tiempo continuo y discreto mediante impulsos de Dirac:</p>
+                        <div class="bg-slate-950 p-2 rounded text-center overflow-x-auto text-emerald-200">
+                            $$x[n] = x(n T_s) \quad \text{donde} \quad T_s = \frac{1}{f_s}$$
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Right Visualizations Panel -->
+        <div class="lg:col-span-3 space-y-6">
+
+            <!-- 1. Waveform Canvas -->
+            <div class="bg-techCard p-4 md:p-5 rounded-xl border border-slate-800 shadow-lg space-y-2 relative">
+                <div class="flex justify-between items-center">
+                    <h3 class="text-sm md:text-base font-bold text-cyan-300 flex items-center gap-2">
+                        <i class="fa-solid fa-chart-line"></i> Forma de Onda en el Tiempo $x(t) \,/\, x[n]$
+                    </h3>
+                    <span id="waveTypeBadge" class="text-xs px-2 py-1 rounded bg-cyan-950 text-cyan-400 border border-cyan-800 font-mono">
+                        Aproximación Continua
+                    </span>
+                </div>
+                <div class="relative bg-slate-950 rounded-lg overflow-hidden border border-slate-800">
+                    <canvas id="waveformCanvas" height="180"></canvas>
+                </div>
+            </div>
+
+            <!-- 2. Spectrogram Canvas -->
+            <div class="bg-techCard p-4 md:p-5 rounded-xl border border-slate-800 shadow-lg space-y-2">
+                <div class="flex justify-between items-center">
+                    <h3 class="text-sm md:text-base font-bold text-purple-300 flex items-center gap-2">
+                        <i class="fa-solid fa-water"></i> Espectrograma de Audio en Tiempo Real (Evolución Temporal de Frecuencias)
+                    </h3>
+                    <span class="text-xs text-slate-400 font-mono">Eje Y: Frecuencia (Hz) | Eje X: Tiempo ($\Delta t$)</span>
+                </div>
+                <div class="relative bg-slate-950 rounded-lg overflow-hidden border border-slate-800">
+                    <canvas id="spectrogramCanvas" height="200"></canvas>
+                </div>
+            </div>
+
+            <!-- 3. Frequency Spectrum & FFT Canvas -->
+            <div class="bg-techCard p-4 md:p-5 rounded-xl border border-slate-800 shadow-lg space-y-2">
+                <div class="flex justify-between items-center">
+                    <h3 class="text-sm md:text-base font-bold text-blue-300 flex items-center gap-2">
+                        <i class="fa-solid fa-chart-column"></i> Espectro de Magnitud de Fourier $|X[k]|$ (Con Detección de Picos)
+                    </h3>
+                    <span class="text-xs text-slate-400 font-mono">Detección de Picos Frecuenciales (Hz)</span>
+                </div>
+                <div class="relative bg-slate-950 rounded-lg overflow-hidden border border-slate-800">
+                    <canvas id="spectrumCanvas" height="200"></canvas>
+                </div>
+            </div>
+
+            <!-- 4. Stem-Plot / Number of Samples Canvas -->
+            <div class="bg-techCard p-4 md:p-5 rounded-xl border border-slate-800 shadow-lg space-y-2">
+                <div class="flex justify-between items-center">
+                    <h3 class="text-sm md:text-base font-bold text-emerald-300 flex items-center gap-2">
+                        <i class="fa-solid fa-grip-lines-vertical"></i> Muestras Discretas $x[n]$ (Gráfico Stem / Tallos de Muestreo)
+                    </h3>
+                    <span id="samplesCountBadge" class="text-xs px-2 py-1 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 font-mono">
+                        N = 1024 muestras activas
+                    </span>
+                </div>
+                <div class="relative bg-slate-950 rounded-lg overflow-hidden border border-slate-800">
+                    <canvas id="stemCanvas" height="180"></canvas>
+                </div>
+            </div>
+
+        </div>
+
+    </div>
+
+    <!-- Script Implementation -->
+    <script>
+        // Web Audio API Context variables
+        let audioCtx = null;
+        let analyser = null;
+        let microphoneStream = null;
+        let gainNode = null;
+        let audioSourceNode = null;
+
+        // Configuration State
+        let isAudioActive = false;
+        let isFrozen = false;
+        let sourceType = 'mic'; // 'mic' or 'system'
+        let fftSize = 1024;
+        let gainValue = 1.0;
+        let specSensitivity = 2.0;
+        let colorMap = 'inferno';
+        let representationMode = 'continuous'; // 'continuous' or 'discrete'
+
+        // Audio Buffers
+        let timeData = null;
+        let freqData = null;
+
+        // UI Element References
+        const toggleMicBtn = document.getElementById('toggleMic');
+        const micIcon = document.getElementById('micIcon');
+        const micText = document.getElementById('micText');
+        const freezeBtn = document.getElementById('freezeBtn');
+        const freezeIcon = document.getElementById('freezeIcon');
+        const audioSourceSelect = document.getElementById('audioSourceSelect');
+        const fftSizeSelect = document.getElementById('fftSizeSelect');
+        const modeContinuousBtn = document.getElementById('modeContinuous');
+        const modeDiscreteBtn = document.getElementById('modeDiscrete');
+        const gainSlider = document.getElementById('gainSlider');
+        const gainVal = document.getElementById('gainVal');
+        const specSensSlider = document.getElementById('specSensSlider');
+        const specSensVal = document.getElementById('specSensVal');
+        const colorMapSelect = document.getElementById('colorMapSelect');
+
+        // Display labels
+        const sampleRateDisp = document.getElementById('sampleRateDisp');
+        const samplePeriodDisp = document.getElementById('samplePeriodDisp');
+        const peakFreqDisp = document.getElementById('peakFreqDisp');
+        const peakMagDisp = document.getElementById('peakMagDisp');
+        const nyquistDisp = document.getElementById('nyquistDisp');
+        const freqResDisp = document.getElementById('freqResDisp');
+        const waveTypeBadge = document.getElementById('waveTypeBadge');
+        const samplesCountBadge = document.getElementById('samplesCountBadge');
+
+        // Canvases
+        const waveCanvas = document.getElementById('waveformCanvas');
+        const specCanvas = document.getElementById('spectrogramCanvas');
+        const fftCanvas = document.getElementById('spectrumCanvas');
+        const stemCanvas = document.getElementById('stemCanvas');
+
+        const waveCtx = waveCanvas.getContext('2d');
+        const specCtx = specCanvas.getContext('2d');
+        const fftCtx = fftCanvas.getContext('2d');
+        const stemCtx = stemCanvas.getContext('2d');
+
+        // Setup resize observers / canvas dimensions
+        function resizeCanvases() {
+            const containers = document.querySelectorAll('.relative.bg-slate-950');
+            containers.forEach(container => {
+                const canvas = container.querySelector('canvas');
+                if (canvas) {
+                    canvas.width = container.clientWidth;
+                }
+            });
+        }
+        window.addEventListener('resize', resizeCanvases);
+        resizeCanvases();
+
+        // Color Maps for Spectrogram
+        function getSpectrogramColor(value, sensitivity, map) {
+            let v = (value / 255) * sensitivity;
+            v = Math.min(1, Math.max(0, v));
+
+            if (map === 'inferno') {
+                const r = Math.floor(Math.min(255, v * 3 * 255));
+                const g = Math.floor(Math.min(255, Math.max(0, (v - 0.3) * 3 * 255)));
+                const b = Math.floor(Math.min(255, Math.max(0, (v - 0.7) * 3.3 * 255)));
+                return `rgb(${r}, ${g}, ${b})`;
+            } else if (map === 'rainbow') {
+                const h = (1 - v) * 280; // Hue 280 to 0
+                return `hsl(${h}, 100%, ${v * 60 + 10}%)`;
+            } else if (map === 'cyan') {
+                const r = Math.floor(v * 40);
+                const g = Math.floor(v * 240);
+                const b = Math.floor(v * 255);
+                return `rgb(${r}, ${g}, ${b})`;
+            } else { // grayscale
+                const g = Math.floor(v * 255);
+                return `rgb(${g}, ${g}, ${g})`;
+            }
+        }
+
+        // Audio Stream Initialization
+        async function startAudio() {
+            try {
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+
+                if (audioCtx.state === 'suspended') {
+                    await audioCtx.resume();
+                }
+
+                // Stop active stream tracks if any
+                if (microphoneStream) {
+                    microphoneStream.getTracks().forEach(track => track.stop());
+                }
+
+                sourceType = audioSourceSelect.value;
+
+                if (sourceType === 'system') {
+                    // Capture desktop/system audio via getDisplayMedia
+                    microphoneStream = await navigator.mediaDevices.getDisplayMedia({
+                        video: true,
+                        audio: {
+                            echoCancellation: false,
+                            noiseSuppression: false,
+                            autoGainControl: false
+                        }
+                    });
+
+                    // Check if audio track is present
+                    const audioTracks = microphoneStream.getAudioTracks();
+                    if (audioTracks.length === 0) {
+                        microphoneStream.getTracks().forEach(track => track.stop());
+                        alert('No se detectó pista de audio en la fuente seleccionada. Asegúrate de marcar la casilla "Compartir audio del sistema/pestaña".');
+                        audioSourceSelect.value = 'mic';
+                        return startAudio();
+                    }
+
+                    // Handle user stopping screen share via native browser UI
+                    audioTracks[0].onended = () => {
+                        if (isAudioActive) stopAudio();
+                    };
+                } else {
+                    // Capture Microphone
+                    microphoneStream = await navigator.mediaDevices.getUserMedia({
+                        audio: {
+                            echoCancellation: false,
+                            noiseSuppression: false,
+                            autoGainControl: false
+                        },
+                        video: false
+                    });
+                }
+
+                // Setup nodes
+                if (audioSourceNode) {
+                    audioSourceNode.disconnect();
+                }
+
+                audioSourceNode = audioCtx.createMediaStreamSource(microphoneStream);
+                
+                if (!gainNode) {
+                    gainNode = audioCtx.createGain();
+                }
+                gainNode.gain.value = gainValue;
+
+                if (!analyser) {
+                    analyser = audioCtx.createAnalyser();
+                }
+                analyser.fftSize = parseInt(fftSize);
+                analyser.smoothingTimeConstant = 0.8;
+
+                audioSourceNode.connect(gainNode);
+                gainNode.connect(analyser);
+
+                timeData = new Uint8Array(analyser.fftSize);
+                freqData = new Uint8Array(analyser.frequencyBinCount);
+
+                isAudioActive = true;
+                toggleMicBtn.classList.remove('from-cyan-500', 'to-blue-600');
+                toggleMicBtn.classList.add('from-rose-500', 'to-red-600');
+                micIcon.className = 'fa-solid fa-stop';
+                micText.innerText = 'Detener Captura';
+
+                // Update Telemetry
+                const fs = audioCtx.sampleRate;
+                sampleRateDisp.innerText = `${fs} Hz`;
+                samplePeriodDisp.innerText = `${(1000 / fs).toFixed(3)} ms`;
+                nyquistDisp.innerText = `${(fs / 2).toFixed(0)} Hz`;
+                freqResDisp.innerText = `${(fs / analyser.fftSize).toFixed(2)} Hz`;
+
+            } catch (err) {
+                console.error("Error al acceder a la fuente de audio:", err);
+                if (err.name !== 'NotAllowedError') {
+                    alert('No se pudo acceder a la fuente de audio: ' + err.message);
+                }
+                stopAudio();
+            }
+        }
+
+        function stopAudio() {
+            if (microphoneStream) {
+                microphoneStream.getTracks().forEach(track => track.stop());
+                microphoneStream = null;
+            }
+            isAudioActive = false;
+            toggleMicBtn.classList.remove('from-rose-500', 'to-red-600');
+            toggleMicBtn.classList.add('from-cyan-500', 'to-blue-600');
+            micIcon.className = 'fa-solid fa-play';
+            micText.innerText = 'Iniciar Captura';
+        }
+
+        // Toggle Audio Capture
+        toggleMicBtn.addEventListener('click', () => {
+            if (isAudioActive) {
+                stopAudio();
+            } else {
+                startAudio();
+            }
+        });
+
+        // Switch Audio Source dynamically
+        audioSourceSelect.addEventListener('change', () => {
+            if (isAudioActive) {
+                startAudio();
+            }
+        });
+
+        // Freeze / Pause Rendering
+        freezeBtn.addEventListener('click', () => {
+            isFrozen = !isFrozen;
+            if (isFrozen) {
+                freezeBtn.classList.remove('bg-slate-800', 'text-slate-300');
+                freezeBtn.classList.add('bg-amber-500', 'text-slate-950');
+                freezeIcon.className = 'fa-solid fa-play';
+            } else {
+                freezeBtn.classList.remove('bg-amber-500', 'text-slate-950');
+                freezeBtn.classList.add('bg-slate-800', 'text-slate-300');
+                freezeIcon.className = 'fa-solid fa-pause';
+            }
+        });
+
+        // FFT Size Change
+        fftSizeSelect.addEventListener('change', (e) => {
+            fftSize = parseInt(e.target.value);
+            if (analyser) {
+                analyser.fftSize = fftSize;
+                timeData = new Uint8Array(analyser.fftSize);
+                freqData = new Uint8Array(analyser.frequencyBinCount);
+                if (audioCtx) {
+                    freqResDisp.innerText = `${(audioCtx.sampleRate / fftSize).toFixed(2)} Hz`;
+                }
+            }
+            samplesCountBadge.innerText = `N = ${fftSize} muestras activas`;
+        });
+
+        // Continuous / Discrete Representation Toggle
+        modeContinuousBtn.addEventListener('click', () => {
+            representationMode = 'continuous';
+            modeContinuousBtn.className = 'px-3 py-2 text-xs font-bold rounded-lg border border-cyan-500 bg-cyan-500/20 text-cyan-300';
+            modeDiscreteBtn.className = 'px-3 py-2 text-xs font-bold rounded-lg border border-slate-700 bg-slate-900 text-slate-400 hover:border-slate-600';
+            waveTypeBadge.innerText = 'Aproximación Continua x(t)';
+            waveTypeBadge.className = 'text-xs px-2 py-1 rounded bg-cyan-950 text-cyan-400 border border-cyan-800 font-mono';
+        });
+
+        modeDiscreteBtn.addEventListener('click', () => {
+            representationMode = 'discrete';
+            modeDiscreteBtn.className = 'px-3 py-2 text-xs font-bold rounded-lg border border-purple-500 bg-purple-500/20 text-purple-300';
+            modeContinuousBtn.className = 'px-3 py-2 text-xs font-bold rounded-lg border border-slate-700 bg-slate-900 text-slate-400 hover:border-slate-600';
+            waveTypeBadge.innerText = 'Muestras Discretas x[n]';
+            waveTypeBadge.className = 'text-xs px-2 py-1 rounded bg-purple-950 text-purple-400 border border-purple-800 font-mono';
+        });
+
+        // Sliders
+        gainSlider.addEventListener('input', (e) => {
+            gainValue = parseFloat(e.target.value);
+            gainVal.innerText = `${gainValue.toFixed(1)}x`;
+            if (gainNode) {
+                gainNode.gain.value = gainValue;
+            }
+        });
+
+        specSensSlider.addEventListener('input', (e) => {
+            specSensitivity = parseFloat(e.target.value);
+            specSensVal.innerText = specSensitivity.toFixed(1);
+        });
+
+        colorMapSelect.addEventListener('change', (e) => {
+            colorMap = e.target.value;
+        });
+
+        // Draw Waveform (Canvas 1)
+        function drawWaveform() {
+            const width = waveCanvas.width;
+            const height = waveCanvas.height;
+            waveCtx.fillStyle = '#030712';
+            waveCtx.fillRect(0, 0, width, height);
+
+            // Grid Lines
+            waveCtx.strokeStyle = '#1e293b';
+            waveCtx.lineWidth = 1;
+            waveCtx.beginPath();
+            waveCtx.moveTo(0, height / 2);
+            waveCtx.lineTo(width, height / 2);
+            waveCtx.stroke();
+
+            if (!timeData) return;
+
+            const sliceWidth = width / timeData.length;
+
+            if (representationMode === 'continuous') {
+                // Smooth Continuous Curve
+                waveCtx.lineWidth = 2;
+                waveCtx.strokeStyle = '#00f2fe';
+                waveCtx.shadowBlur = 8;
+                waveCtx.shadowColor = '#00f2fe';
+                waveCtx.beginPath();
+
+                let x = 0;
+                for (let i = 0; i < timeData.length; i++) {
+                    const v = timeData[i] / 128.0; // Normalized 0..2 (1.0 zero centered)
+                    const y = (v * height) / 2;
+
+                    if (i === 0) waveCtx.moveTo(x, y);
+                    else waveCtx.lineTo(x, y);
+
+                    x += sliceWidth;
+                }
+                waveCtx.stroke();
+                waveCtx.shadowBlur = 0;
+            } else {
+                // Discrete Sample Points
+                let x = 0;
+                for (let i = 0; i < timeData.length; i += Math.max(1, Math.floor(timeData.length / 128))) {
+                    const v = timeData[i] / 128.0;
+                    const y = (v * height) / 2;
+                    const samplePos = (i / timeData.length) * width;
+
+                    waveCtx.strokeStyle = '#c084fc';
+                    waveCtx.fillStyle = '#a855f7';
+                    waveCtx.lineWidth = 1;
+
+                    waveCtx.beginPath();
+                    waveCtx.moveTo(samplePos, height / 2);
+                    waveCtx.lineTo(samplePos, y);
+                    waveCtx.stroke();
+
+                    waveCtx.beginPath();
+                    waveCtx.arc(samplePos, y, 2.5, 0, Math.PI * 2);
+                    waveCtx.fill();
+                }
+            }
+        }
+
+        // Draw Spectrogram (Canvas 2)
+        function drawSpectrogram() {
+            if (!freqData) return;
+
+            const width = specCanvas.width;
+            const height = specCanvas.height;
+
+            // Shift existing spectrogram image left by 2 pixels
+            const imgData = specCtx.getImageData(2, 0, width - 2, height);
+            specCtx.putImageData(imgData, 0, 0);
+
+            // Draw new slice on the right edge
+            const numBins = freqData.length;
+            const binHeight = height / numBins;
+
+            for (let i = 0; i < numBins; i++) {
+                const value = freqData[i];
+                specCtx.fillStyle = getSpectrogramColor(value, specSensitivity, colorMap);
+                // Draw frequency bins (low frequencies at bottom, high at top)
+                const y = height - (i + 1) * binHeight;
+                specCtx.fillRect(width - 2, y, 2, binHeight + 1);
+            }
+        }
+
+        // Draw Spectrum & Fourier Peaks (Canvas 3)
+        function drawSpectrum() {
+            const width = fftCanvas.width;
+            const height = fftCanvas.height;
+            fftCtx.fillStyle = '#030712';
+            fftCtx.fillRect(0, 0, width, height);
+
+            if (!freqData || !audioCtx) return;
+
+            const bufferLength = freqData.length;
+            const barWidth = width / bufferLength;
+            const nyquist = audioCtx.sampleRate / 2;
+
+            let maxVal = -1;
+            let maxIndex = -1;
+
+            // Peak detection structures
+            const peaks = [];
+            const threshold = 60; // minimum magnitude threshold to consider a peak
+
+            for (let i = 1; i < bufferLength - 1; i++) {
+                const val = freqData[i];
+
+                // Track global maximum
+                if (val > maxVal) {
+                    maxVal = val;
+                    maxIndex = i;
+                }
+
+                // Detect local peaks (greater than left and right neighbors)
+                if (val > threshold && val > freqData[i - 1] && val > freqData[i + 1]) {
+                    peaks.push({ index: i, val: val });
+                }
+            }
+
+            // Draw FFT Magnitude Bars
+            for (let i = 0; i < bufferLength; i++) {
+                const barHeight = (freqData[i] / 255) * (height - 35);
+                const x = i * barWidth;
+                const y = height - 25 - barHeight;
+
+                const gradient = fftCtx.createLinearGradient(0, height - 25, 0, 0);
+                gradient.addColorStop(0, '#3b82f6');
+                gradient.addColorStop(1, '#60a5fa');
+
+                fftCtx.fillStyle = gradient;
+                fftCtx.fillRect(x, y, Math.max(1, barWidth - 0.5), barHeight);
+            }
+
+            // Sort peaks by magnitude to label top prominent peaks
+            peaks.sort((a, b) => b.val - a.val);
+            const topPeaks = peaks.slice(0, 5); // Pick top 5 peaks
+
+            // Draw Peak Markers and Numbers at the Bottom
+            topPeaks.forEach((peak) => {
+                const peakX = peak.index * barWidth + barWidth / 2;
+                const freqHz = (peak.index * nyquist) / bufferLength;
+                const isDominant = peak.index === maxIndex;
+                const labelColor = isDominant ? '#f43f5e' : '#00f2fe';
+
+                // Vertical projection line
+                fftCtx.strokeStyle = labelColor;
+                fftCtx.setLineDash([2, 3]);
+                fftCtx.lineWidth = 1;
+                fftCtx.beginPath();
+                fftCtx.moveTo(peakX, 10);
+                fftCtx.lineTo(peakX, height - 22);
+                fftCtx.stroke();
+                fftCtx.setLineDash([]);
+
+                // Peak dot marker on spectrum line
+                const peakY = height - 25 - (peak.val / 255) * (height - 35);
+                fftCtx.fillStyle = labelColor;
+                fftCtx.beginPath();
+                fftCtx.arc(peakX, peakY, 3, 0, Math.PI * 2);
+                fftCtx.fill();
+
+                // Numerical Hz Label at the Bottom
+                const labelText = `${Math.round(freqHz)}Hz`;
+                fftCtx.font = '9px monospace';
+                const textWidth = fftCtx.measureText(labelText).width;
+                
+                // Label background pill
+                fftCtx.fillStyle = isDominant ? '#881337' : '#083344';
+                fftCtx.strokeStyle = labelColor;
+                fftCtx.lineWidth = 1;
+                const badgeX = Math.min(Math.max(peakX - textWidth / 2 - 3, 2), width - textWidth - 8);
+                fftCtx.fillRect(badgeX, height - 20, textWidth + 6, 14);
+                fftCtx.strokeRect(badgeX, height - 20, textWidth + 6, 14);
+
+                // Text value
+                fftCtx.fillStyle = '#ffffff';
+                fftCtx.fillText(labelText, badgeX + 3, height - 9);
+            });
+
+            // Update telemetry UI for dominant peak F0
+            if (maxIndex !== -1 && maxVal > 0) {
+                const peakHz = (maxIndex * nyquist) / bufferLength;
+                const magDb = (20 * Math.log10(maxVal / 255)).toFixed(1);
+                peakFreqDisp.innerText = `${peakHz.toFixed(1)} Hz`;
+                peakMagDisp.innerText = `${magDb} dB`;
+            } else {
+                peakFreqDisp.innerText = `-- Hz`;
+                peakMagDisp.innerText = `-- dB`;
+            }
+
+            // Frequency Axis Base Line
+            fftCtx.strokeStyle = '#475569';
+            fftCtx.lineWidth = 1;
+            fftCtx.beginPath();
+            fftCtx.moveTo(0, height - 22);
+            fftCtx.lineTo(width, height - 22);
+            fftCtx.stroke();
+        }
+
+        // Draw Stem Plot / Discrete Samples x[n] (Canvas 4)
+        function drawStemPlot() {
+            const width = stemCanvas.width;
+            const height = stemCanvas.height;
+            stemCtx.fillStyle = '#030712';
+            stemCtx.fillRect(0, 0, width, height);
+
+            if (!timeData) return;
+
+            const centerY = height / 2;
+            const maxStems = Math.min(128, timeData.length);
+            const step = Math.floor(timeData.length / maxStems);
+            const stemSpacing = width / maxStems;
+
+            // Zero line
+            stemCtx.strokeStyle = '#334155';
+            stemCtx.lineWidth = 1;
+            stemCtx.beginPath();
+            stemCtx.moveTo(0, centerY);
+            stemCtx.lineTo(width, centerY);
+            stemCtx.stroke();
+
+            for (let i = 0; i < maxStems; i++) {
+                const sampleIdx = i * step;
+                // Convert Uint8 (0..255) to normalized float (-1.0 .. 1.0)
+                const sampleVal = (timeData[sampleIdx] - 128) / 128.0;
+                const x = i * stemSpacing + stemSpacing / 2;
+                const y = centerY - sampleVal * (height / 2.4);
+
+                // Stem vertical line
+                stemCtx.strokeStyle = sampleVal >= 0 ? '#10b981' : '#f43f5e';
+                stemCtx.lineWidth = 1.5;
+                stemCtx.beginPath();
+                stemCtx.moveTo(x, centerY);
+                stemCtx.lineTo(x, y);
+                stemCtx.stroke();
+
+                // Stem head (node point)
+                stemCtx.fillStyle = sampleVal >= 0 ? '#34d399' : '#fb7185';
+                stemCtx.beginPath();
+                stemCtx.arc(x, y, 3, 0, Math.PI * 2);
+                stemCtx.fill();
+            }
+        }
+
+        // Main Render Loop
+        function renderLoop() {
+            requestAnimationFrame(renderLoop);
+
+            if (isAudioActive && !isFrozen && analyser) {
+                analyser.getByteTimeDomainData(timeData);
+                analyser.getByteFrequencyData(freqData);
+            }
+
+            drawWaveform();
+            if (isAudioActive && !isFrozen) {
+                drawSpectrogram();
+            }
+            drawSpectrum();
+            drawStemPlot();
+        }
+
+        // Start render loop on load
+        window.onload = function() {
+            renderLoop();
+        };
+    </script>
+</body>
+</html>
